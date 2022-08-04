@@ -13,7 +13,8 @@ Downloads E-Mails from a specific folder and sends them to the Default Printer v
 - Clone this Repository: ```git clone https://github.com/itsscb/autoprint.git```
 - Build the binary: ```go build```
 - Create the *settings.yaml*-file
-	- Example ```IMAPUri:  imap.provider.com:993
+	- Example ```
+IMAPUri:  imap.provider.com:993
 Username: user@example.com
 Password: P@$$w0Rd
 TLS: true # TLS = true, STARTTLS = false
