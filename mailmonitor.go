@@ -17,10 +17,6 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-const (
-	layout string = "2006-01-02_15040507"
-)
-
 type Monitor struct {
 	IMAPUri           string `yaml:"IMAPUri"`
 	Username          string `yaml:"Username"`
