@@ -343,7 +343,7 @@ func (m *Monitor) PrintAll() error {
 						tfp = fp + ".html"
 					} else if strings.Contains(ct, "text/plain") {
 						tfp = fp + ".txt"
-					} else {
+					} else if strings.Contains(ct, "application/pdf") || strings.Contains(ct, "image") {
 						filename := strings.Split(
 							strings.Split(ct, ";")[1],
 							"=")[1]
@@ -351,7 +351,17 @@ func (m *Monitor) PrintAll() error {
 					}
 
 				case *mail.AttachmentHeader:
-					filename, _ := h.Filename()
+					var filename string
+					if strings.Contains(ct, "text/html") {
+						tfp = fp + ".html"
+					} else if strings.Contains(ct, "text/plain") {
+						tfp = fp + ".txt"
+					} else if strings.Contains(ct, "application/pdf") || strings.Contains(ct, "image") {
+						filename, _ = h.Filename()
+						tfp = fp + filename
+					} else {
+						continue
+					}
 					tfp = fp + filename
 				}
 
