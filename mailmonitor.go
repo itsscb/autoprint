@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"errors"
 	"io"
 	"log"
@@ -10,16 +9,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	imap "github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	"github.com/emersion/go-message/mail"
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v2"
 )
 
 const (
-	layout string = "2006-01-02T15:04:05Z07:00"
+	layout string = "2006-01-02_15040507"
 )
 
 type Monitor struct {
@@ -30,6 +29,7 @@ type Monitor struct {
 	DestinationFolder string `yaml:"DestinationFolder"`
 	TLS               bool   `yaml:"TLS"`
 	DebugLevel        int64  `yaml:"DebugLevel"`
+	Files             []string
 	Client            *client.Client
 	FetchSet          *imap.SeqSet
 	ReadSet           *imap.SeqSet
@@ -161,294 +161,6 @@ func (m *Monitor) CheckConnection() error {
 	return nil
 }
 
-func (m *Monitor) Fetch() {
-	if m.DebugLevel > 0 {
-		log.Printf("Fetching unread Messages from Folder: %s\n", m.SourceFolder)
-	}
-	if err := m.CheckConnection(); err != nil {
-		log.Printf("%s - Connection lost: %s", m.Username, err)
-		return
-	}
-
-	if m.DebugLevel > 0 {
-		log.Printf("Preparing Search Request by Selecting Folder: %s\n", m.SourceFolder)
-	}
-	criteria := imap.NewSearchCriteria()
-	criteria.WithoutFlags = []string{imap.SeenFlag}
-	_, err := m.Client.Select(m.SourceFolder, false)
-	if err != nil {
-		log.Println(err)
-	}
-
-	if m.DebugLevel > 0 {
-		log.Printf("Sending Search Request...\n")
-	}
-	ids, err := m.Client.Search(criteria)
-	if err != nil {
-		log.Println(err)
-	}
-
-	if m.DebugLevel > 0 {
-		log.Printf("Found %d Messages in %s\n", len(ids), m.SourceFolder)
-	}
-	if len(ids) <= 0 {
-		return
-	}
-
-	m.FetchSet.AddNum(ids...)
-
-	if m.DebugLevel > 0 {
-		log.Printf("Fetching %d Messages from %s\n", len(ids), m.SourceFolder)
-	}
-	go func() {
-		m.DoneChan <- m.Client.Fetch(m.FetchSet, []imap.FetchItem{"BODY.PEEK[]"}, m.MessageChan) //imap.FetchRFC822}, m.MessageChan)
-	}()
-
-	err = m.PrintAll()
-	if err != nil {
-		log.Println(err)
-	}
-	log.Printf("Fetching done\n")
-}
-
-func (m *Monitor) MarkRead() {
-	if m.DebugLevel > 0 {
-		log.Printf("Marking Messages read in Folder: %s\n", m.DestinationFolder)
-	}
-
-	if err := m.CheckConnection(); err != nil {
-		log.Printf("%s - Connection lost: %s", m.Username, err)
-		return
-	}
-
-	if m.DebugLevel > 0 {
-		log.Printf("Preparing Search Request by Selecting Folder: %s\n", m.DestinationFolder)
-	}
-	criteria := imap.NewSearchCriteria()
-	criteria.WithoutFlags = []string{imap.SeenFlag}
-	_, err := m.Client.Select(m.DestinationFolder, false)
-	if err != nil {
-		log.Println("Marking read failed: ", err)
-	}
-
-	if m.DebugLevel > 0 {
-		log.Printf("Sending Search Request...\n")
-	}
-	ids, err := m.Client.Search(criteria)
-	if err != nil {
-		log.Println("Getting unread messages: ", err)
-	}
-
-	if m.DebugLevel > 0 {
-		log.Printf("Found %d Messages in %s\n", len(ids), m.DestinationFolder)
-	}
-	if len(ids) <= 0 {
-		log.Println("No unread Messages found.")
-		return
-	}
-
-	m.ReadSet.Clear()
-	m.ReadSet.AddNum(ids...)
-
-	if m.DebugLevel > 0 {
-		log.Printf("Marking %d Messages read in %s\n", len(ids), m.DestinationFolder)
-	}
-	item := imap.FormatFlagsOp(imap.AddFlags, true)
-	flags := []interface{}{imap.SeenFlag}
-	err = m.Client.Store(m.ReadSet, item, flags, nil)
-	if err != nil {
-		log.Fatal("Marking as read: ", err)
-	}
-	if m.DebugLevel > 0 {
-		log.Printf("Marked %d Messages read in %s\n", len(ids), m.DestinationFolder)
-	}
-	log.Printf("Marking read done\n")
-}
-
-func (m *Monitor) PrintAll() error {
-	moveSeqSet := new(imap.SeqSet)
-	if m.DebugLevel > 0 {
-		log.Printf("Downloading & sending fetched Messages to Default Printer\n")
-	}
-
-	for msg := range m.MessageChan {
-		var file string
-		var err error
-		var subject string
-		var from string
-		var to string
-		var cc string
-		var date string
-		var header []string
-		var html int
-		var text int
-
-		timestamp := time.Now().Format(layout)
-
-		file = filepath.Join(os.TempDir(), (base64.StdEncoding.EncodeToString([]byte(timestamp))))
-
-		filehtml := file + ".html"
-		filetxt := file + ".txt"
-
-		fhtml, err := os.Create(filehtml)
-		if err != nil {
-			log.Println("File Creation: ", err)
-			return err
-		}
-		defer fhtml.Close()
-
-		ftxt, err := os.Create(filetxt)
-		if err != nil {
-			log.Println("File Creation: ", err)
-			return err
-		}
-		defer ftxt.Close()
-
-		for _, literal := range msg.Body {
-			mr, err := mail.CreateReader(literal)
-			if err != nil {
-				log.Fatal("Creating Reader:", err)
-				return err
-			}
-
-			fr, _ := mr.Header.AddressList("From")
-			for _, a := range fr {
-				from += a.Address + ","
-			}
-			from = from[:len(from)-1]
-
-			t, _ := mr.Header.AddressList("To")
-			for _, a := range t {
-				to += a.Address + ","
-			}
-			to = to[:len(to)-1]
-
-			c, _ := mr.Header.AddressList("Cc")
-			if len(c) > 0 {
-				for _, a := range c {
-					cc += a.Address + ","
-				}
-				cc = cc[:len(cc)-1]
-			}
-			date = mr.Header.Get("Date")
-			subject = mr.Header.Get("Subject")
-
-			if m.DebugLevel > 0 {
-				log.Println(date, from, to, subject, cc)
-			}
-
-			if "" != date {
-				header = append(
-					header,
-					("Date:\t\t" + date + "\n"),
-				)
-			}
-			if "" != from {
-				header = append(
-					header,
-					("From:\t\t" + from + "\n"),
-				)
-			}
-			if "" != to {
-				header = append(
-					header,
-					("To:\t\t" + to + "\n"),
-				)
-			}
-			if "" != cc {
-				header = append(
-					header,
-					("Cc:\t\t" + cc + "\n"),
-				)
-			}
-			if "" != subject {
-				header = append(
-					header,
-					("Subject:\t" + subject + "\n"),
-				)
-			}
-
-			header = append(
-				header,
-				("====================================\n\n\n\n"),
-			)
-
-			for _, s := range header {
-				fhtml.WriteString(s)
-				if err != nil {
-					log.Printf("Writing File (Header): %s\n", err)
-				}
-				ftxt.WriteString(s)
-				if err != nil {
-					log.Printf("Writing File (Header): %s\n", err)
-				}
-			}
-			for {
-				p, err := mr.NextPart()
-				if err == io.EOF {
-					break
-				} else if err != nil {
-					log.Printf("Reading Message: %s\n", err)
-					return err
-				}
-
-				switch h := p.Header.(type) {
-				case *mail.InlineHeader:
-
-					t, _, err := h.ContentType()
-					if err != nil {
-						log.Printf("Reading ContentType: %s\n", err)
-						return err
-					}
-					switch t {
-					case "text/html":
-						htmltmp := parseMessage(p.Body, fhtml)
-						if htmltmp > 0 {
-							html = htmltmp
-						}
-					case "text/plain":
-						texttmp := parseMessage(p.Body, ftxt)
-						if texttmp > 0 {
-							text = texttmp
-						}
-					default:
-						continue
-					}
-				}
-			}
-			moveSeqSet.AddNum(msg.Uid)
-			err = m.Client.Move(moveSeqSet, m.DestinationFolder)
-			if err != nil {
-				log.Println("Moving Item: ", err)
-			}
-		}
-		if text > 0 {
-			file = filetxt
-		} else if html > 0 {
-			file = filehtml
-		}
-
-		err = printLinux(file, true)
-		if err != nil {
-			log.Println("Printing: ", err)
-			return err
-		}
-	}
-
-	m.MessageChan = make(chan *imap.Message)
-	return nil
-}
-
-func parseMessage(r io.Reader, f *os.File) int {
-	var err error
-	content, _ := io.ReadAll(r)
-	i, err := f.Write(content)
-	if err != nil {
-		log.Printf("Writing File (%s): %s", f.Name(), err)
-	}
-	return i
-}
-
 func CheckPrerequisites() error {
 	var err error
 	_, err = exec.LookPath("wkhtmltopdf")
@@ -464,14 +176,17 @@ func CheckPrerequisites() error {
 	return err
 }
 
-func printLinux(path string, delete bool) error {
+func printLinux(path string) error {
+	var err error
+	var npath string
+
 	lp, err := exec.LookPath("lp")
 	if err != nil {
 		log.Println(err)
 		return err
 	}
 	if strings.Contains(path, "html") {
-		npath := strings.ReplaceAll(path, ".html", ".pdf")
+		npath = strings.ReplaceAll(path, ".html", ".pdf")
 
 		wkhtmltopdf, err := exec.LookPath("wkhtmltopdf")
 		if err != nil {
@@ -479,21 +194,16 @@ func printLinux(path string, delete bool) error {
 			return err
 		}
 
-		cmd := exec.Command(wkhtmltopdf, path, npath)
-		_ = cmd.Run()
-		if delete {
-			err = os.Remove(path)
-			if err != nil {
-				log.Println(err)
-			}
-		}
+		convertCMD := exec.Command(wkhtmltopdf, path, npath)
+		_ = convertCMD.Run()
+
 		path = npath
 	}
-	cmd := exec.Command(lp, path)
-	_ = cmd.Run()
+	printCMD := exec.Command(lp, path)
+	_ = printCMD.Run()
 
-	if delete {
-		err = os.Remove(path)
+	if npath != "" {
+		err = os.Remove(npath)
 		if err != nil {
 			log.Println(err)
 		}
@@ -542,5 +252,178 @@ func Run() {
 		log.Fatal(err)
 	}
 	m.Fetch()
-	m.MarkRead()
+}
+
+func (m *Monitor) Fetch() {
+	if m.DebugLevel > 0 {
+		log.Printf("Fetching unread Messages from Folder: %s\n", m.SourceFolder)
+	}
+	if err := m.CheckConnection(); err != nil {
+		log.Printf("%s - Connection lost: %s", m.Username, err)
+		return
+	}
+
+	if m.DebugLevel > 0 {
+		log.Printf("Preparing Search Request by Selecting Folder: %s\n", m.SourceFolder)
+	}
+	criteria := imap.NewSearchCriteria()
+	criteria.WithoutFlags = []string{imap.SeenFlag}
+	_, err := m.Client.Select(m.SourceFolder, false)
+	if err != nil {
+		log.Println(err)
+	}
+
+	if m.DebugLevel > 0 {
+		log.Printf("Sending Search Request...\n")
+	}
+	ids, err := m.Client.Search(criteria)
+	if err != nil {
+		log.Println(err)
+	}
+
+	if m.DebugLevel > 0 {
+		log.Printf("Found %d Messages in %s\n", len(ids), m.SourceFolder)
+	}
+	if len(ids) <= 0 {
+		return
+	}
+
+	m.FetchSet.AddNum(ids...)
+
+	if m.DebugLevel > 0 {
+		log.Printf("Fetching %d Messages from %s\n", len(ids), m.SourceFolder)
+	}
+
+	var section imap.BodySectionName
+	items := []imap.FetchItem{section.FetchItem()}
+
+	go func() {
+		m.DoneChan <- m.Client.Fetch(m.FetchSet, items, m.MessageChan) //imap.FetchRFC822}, m.MessageChan)
+	}()
+
+	err = m.PrintAll()
+	if err != nil {
+		log.Println(err)
+	}
+	log.Printf("Fetching done\n")
+}
+
+func (m *Monitor) PrintAll() error {
+	var err error
+
+	if m.DebugLevel > 0 {
+		log.Printf("Sending fetched Messages to Default Printer\n")
+	}
+
+	for msg := range m.MessageChan {
+
+		for _, literal := range msg.Body {
+			mr, err := mail.CreateReader(literal)
+			if err != nil {
+				log.Fatalf("Could not create Reader: %s", err)
+			}
+
+			uid := uuid.New()
+			fp := filepath.Join(os.TempDir(), uid.String())
+			if m.DebugLevel > 0 {
+				log.Printf("Creating temporary File: %s\n", fp)
+			}
+
+			// var wb int64
+			var tfp string
+			for {
+				p, err := mr.NextPart()
+				if err == io.EOF {
+					break
+				} else if err != nil {
+					log.Fatal(err)
+				}
+
+				ct := p.Header.Get("Content-Type")
+
+				switch h := p.Header.(type) {
+				case *mail.InlineHeader:
+					if strings.Contains(ct, "text/html") {
+						tfp = fp + ".html"
+					} else if strings.Contains(ct, "text/plain") {
+						tfp = fp + ".txt"
+					} else {
+						filename := strings.Split(
+							strings.Split(ct, ";")[1],
+							"=")[1]
+						tfp = fp + filename
+					}
+
+				case *mail.AttachmentHeader:
+					filename, _ := h.Filename()
+					tfp = fp + filename
+				}
+
+				f, err := os.Create(tfp)
+				if err != nil {
+					log.Fatalf("Couldn't create temporary File %s: %s\n", tfp, err)
+				}
+				defer f.Close()
+
+				var exists bool
+				for _, file := range m.Files {
+					if file == tfp {
+						exists = true
+					}
+				}
+
+				if !exists {
+					m.Files = append(m.Files, tfp)
+				}
+
+				if m.DebugLevel > 0 {
+					log.Printf("Got %v: %s\n", p.Header.Get("Content-Type"), tfp)
+				}
+
+				r, err := io.ReadAll(p.Body)
+				if err != nil {
+					log.Fatalf("Could not read to Content: %s\n", err)
+				}
+				_, err = f.Write(r)
+				if err != nil {
+					log.Fatalf("Could not write to File %s: %s", tfp, err)
+				}
+			}
+		}
+	}
+
+	for _, f := range m.Files {
+		fi, err := os.Stat(f)
+		if err != nil {
+			log.Printf("Failed to read File %s: %s\n", f, err)
+		}
+
+		if fi.Size() > 0 {
+			var htmlexists bool
+			if strings.HasSuffix(f, ".txt") {
+				for _, tf := range m.Files {
+					if tf == strings.Replace(f, ".txt", ".html", -1) {
+						if m.DebugLevel > 0 {
+							log.Printf("Found match for %s: %s - Skipping .txt-File\n", f, tf)
+						}
+						htmlexists = true
+					}
+				}
+			}
+
+			if htmlexists {
+				continue
+			}
+			err := printLinux(f)
+			if err != nil {
+				log.Printf("Failed to print File %s: %s\n", f, err)
+			}
+		}
+		err = os.Remove(f)
+		if err != nil {
+			log.Printf("Failed to delete File %s: %s\n", f, err)
+		}
+	}
+
+	return err
 }

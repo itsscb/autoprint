@@ -5,6 +5,7 @@ go 1.18
 require (
 	github.com/emersion/go-imap v1.2.1
 	github.com/emersion/go-message v0.15.0
+	github.com/google/uuid v1.3.0
 	gopkg.in/yaml.v2 v2.4.0
 )
 
