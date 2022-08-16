@@ -13,13 +13,13 @@ Downloads E-Mails from a specific folder and sends them to the Default Printer v
 - Clone this Repository: ```git clone https://github.com/itsscb/autoprint.git```
 - Build the binary: ```go build```
 - Create the *settings.yaml*-file
-- Run the binary (optionally using *cron*
+- Run the binary (optionally using *cron*)
 
 ### Example *settings.yaml*
 ```IMAPUri:  imap.provider.com:993
 Username: user@example.com
 Password: P@$$w0Rd
-TLS: true # TLS = true, STARTTLS = false
+TLS: true # TLS = true, STARTTLS or other = false
 SourceFolder: INBOX/Print # Where to get the E-Mails
 DestinationFolder:  INBOX/Printed # Where to move the E-Mails afterwards
-Debug: 0 # 1 = Verbose, 2 = Debug```
+DebugLevel: 0 # 1 = Verbose, 2 = Debug```
